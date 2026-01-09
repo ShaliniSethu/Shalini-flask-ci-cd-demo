@@ -26,6 +26,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            job_type TEXT,
+            created_by TEXT,
             status TEXT NOT NULL,
             payload TEXT,
             result TEXT,
@@ -35,6 +37,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.commit()
+
+    # Lightweight migration for existing DBs (adds missing columns)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+
+    if "job_type" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN job_type TEXT")
+    if "created_by" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN created_by TEXT")
     conn.commit()
 
 
@@ -69,13 +80,13 @@ def close_db(_exc):
 
 
 def row_to_task(row: sqlite3.Row) -> Dict[str, Any]:
-    # Store payload/result as raw JSON string (simple + dependency-free).
-    # If you want, later we can store JSON as TEXT but parse/serialize using json.loads/dumps.
     return {
         "id": row["id"],
         "name": row["name"],
+        "job_type": row["job_type"],
+        "created_by": row["created_by"],
         "status": row["status"],
-        "payload": row["payload"],   # currently stored as TEXT (may be None)
+        "payload": row["payload"],
         "result": row["result"],
         "error": row["error"],
         "created_at": row["created_at"],
@@ -85,7 +96,7 @@ def row_to_task(row: sqlite3.Row) -> Dict[str, Any]:
 
 @app.get("/")
 def home():
-    return jsonify(message="Hello from Flask CI/CD demo!")
+    return jsonify(message="Job Orchestrator is running, routes available /health, /tasks, /tasks/<task_id>"), 200
 
 
 @app.get("/health")
@@ -100,11 +111,19 @@ def create_task():
 
     data = request.get_json(silent=True) or {}
     name = data.get("name")
+    job_type = data.get("job_type")
+    created_by = data.get("created_by")
     payload = data.get("payload")
 
     if not isinstance(name, str) or not name.strip():
         return make_error("Field 'name' is required and must be a non-empty string", 400)
-
+    
+    if job_type is not None and (not isinstance(job_type, str) or not job_type.strip()):
+        return make_error("Field 'job_type', if provided, must be a non-empty string", 400)
+    
+    if created_by is not None and (not isinstance(created_by, str) or not created_by.strip()):
+        return make_error("Field 'created_by' must be a non-empty string if provided", 400)
+    
     task_id = str(uuid4())
     now = utc_now_iso()
 
@@ -115,10 +134,11 @@ def create_task():
     db = get_db()
     db.execute(
         """
-        INSERT INTO tasks (id, name, status, payload, result, error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, name, job_type, created_by, status, payload, result, error, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (task_id, name.strip(), "pending", payload_str, None, None, now, now),
+        
+        (task_id, name.strip(), job_type.strip() if isinstance(job_type, str) else None, created_by.strip() if isinstance(created_by, str) else None, "pending", payload_str, None, None, now, now),
     )
     db.commit()
 
@@ -226,8 +246,6 @@ def delete_task(task_id: str):
         return make_error("Task not found", 404)
 
     return ("", 204)
-
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)

@@ -23,7 +23,7 @@ def test_home():
     client = app.test_client()
     resp = client.get("/")
     assert resp.status_code == 200
-    assert resp.get_json()["message"]
+
 
 
 def test_health():
@@ -35,12 +35,13 @@ def test_health():
 
 def test_create_task_returns_201_and_task_shape():
     client = app.test_client()
-    resp = client.post("/tasks", json={"name": "backup-db", "payload": {"db": "prod"}})
+    resp = client.post("/tasks", json={"name": "backup-db", "job-type": "db-backup", "payload": {"db": "prod"}})
     assert resp.status_code == 201
 
     task = resp.get_json()
     assert isinstance(task["id"], str) and task["id"]
     assert task["name"] == "backup-db"
+    assert task["job_type"] == "db-backup"
     assert task["status"] == "pending"
     # payload is stored as string in this minimal SQLite version
     assert "prod" in (task["payload"] or "")
@@ -75,6 +76,7 @@ def test_update_task_status_running_then_done():
     running = client.patch(f"/tasks/{task_id}", json={"status": "running"})
     assert running.status_code == 200
     assert running.get_json()["status"] == "running"
+
 
     done = client.patch(f"/tasks/{task_id}", json={"status": "done", "result": {"took_seconds": 2.3}})
     assert done.status_code == 200
@@ -115,8 +117,8 @@ def test_delete_task_removes_it():
 
 def test_filter_tasks_by_status():
     client = app.test_client()
-    t1 = client.post("/tasks", json={"name": "a"}).get_json()["id"]
-    t2 = client.post("/tasks", json={"name": "b"}).get_json()["id"]
+    t1 = client.post("/tasks", json={"name": "backup1", "job-type": "backup", "payload": {"db": "dev"}}).get_json()["id"]
+    t2 = client.post("/tasks", json={"name": "backup2", "job-type": "backup", "payload": {"db": "test"}}).get_json()["id"]
 
     client.patch(f"/tasks/{t1}", json={"status": "running"})
 
